@@ -123,3 +123,34 @@ async def sub_method_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")]])
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
     return SUB_CASH_PROOF
+
+
+async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دالة مؤقتة لاستقبال الصورة حتى لا ينكسر الكود"""
+    query = update.message
+    await query.reply_text("✅ تم استقبال إثبات الدفع، سيتم مراجعته من قبل الإدارة.")
+    return ConversationHandler.END
+
+
+def get_handlers():
+    """هذه الدالة التي يبحث عنها ملف main.py لتشغيل نظام الاشتراكات"""
+    conv_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(sub_menu, pattern="^sub_menu$")
+        ],
+        states={
+            SUB_SELECT_METHOD: [
+                CallbackQueryHandler(sub_select_plan, pattern="^sub_plan_"),
+                CallbackQueryHandler(sub_method_usdt, pattern="^sub_method_usdt")
+            ],
+            SUB_CASH_PROOF: [
+                MessageHandler(filters.PHOTO, handle_sub_proof),
+                CallbackQueryHandler(sub_menu, pattern="^sub_menu$")
+            ]
+        },
+        fallbacks=[
+            CallbackQueryHandler(sub_menu, pattern="^sub_menu$")
+        ],
+        per_message=False
+    )
+    return [conv_handler]
