@@ -80,7 +80,8 @@ async def sub_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = []
     for m in methods:
-        kb.append([InlineKeyboardButton(m["display_name"], callback_data=f"sub_method_{m['method']}")])
+        # نضمّن plan_id في بيانات الزر لضمان استرجاعه حتى بعد إعادة تشغيل البوت
+        kb.append([InlineKeyboardButton(m["display_name"], callback_data=f"sub_method_{plan_id}_{m['method']}")])
     kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")])
 
     text = (
@@ -95,14 +96,40 @@ async def sub_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_sub_method_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دالة موحدة ومضمونة تستقبل ضغطات كافة طرق الدفع (USDT والكاش) وتوجههم لمرحلة الإثبات"""
+    """دالة موحدة ومضمونة تستقبل ضغطات كافة طرق الدفع وتوجههم لمرحلة الإثبات.
+    تدعم الصيغة الجديدة sub_method_{plan_id}_{method} وتسترجع الباقة تلقائياً.
+    """
     query = update.callback_query
     await query.answer()
 
-    method_type = query.data.replace("sub_method_", "")
-    plan = context.user_data.get("sub_plan", {})
+    raw = query.data.replace("sub_method_", "")
+
+    # الصيغة الجديدة: {plan_id}_{method} مثل "5_sham_cash"
+    # نفصل عند أول شرطة سفلية فقط للحصول على plan_id
+    parts = raw.split("_", 1)
+    if len(parts) == 2 and parts[0].isdigit():
+        plan_id = int(parts[0])
+        method_type = parts[1]
+        plan = db.get_plan_by_id(plan_id)
+        if plan:
+            context.user_data["sub_plan"] = plan
+        else:
+            plan = context.user_data.get("sub_plan", {})
+    else:
+        # دعم الصيغة القديمة للتوافق
+        method_type = raw
+        plan = context.user_data.get("sub_plan", {})
+
+    if not plan:
+        await query.edit_message_text(
+            "❌ حدث خطأ في استرجاع بيانات الباقة.\nالرجاء الضغط على /start والمحاولة مجدداً.",
+            parse_mode="Markdown",
+            reply_markup=_back_sub(),
+        )
+        return ConversationHandler.END
+
     setting = db.get_payment_setting(method_type)
-    
+
     if not setting or not setting.get("address"):
         await query.edit_message_text(
             f"❌ لم يتم إعداد بيانات الدفع لـ {method_type} بعد\nيرجى التواصل مع الإدارة.",
@@ -115,7 +142,7 @@ async def handle_sub_method_selection(update: Update, context: ContextTypes.DEFA
     context.user_data["sub_setting"] = dict(setting)
     instr = setting.get("instructions") or ""
     display_name = setting.get("display_name", method_type.replace("_", " ").title())
-    
+
     text = (
         f"💳 *الدفع عبر {display_name}*\n\n"
         f"📦 الباقة: *{plan.get('name','')}*\n"
@@ -132,7 +159,7 @@ async def handle_sub_method_selection(update: Update, context: ContextTypes.DEFA
 async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
-    
+
     if not update.message.photo:
         await update.message.reply_text("❌ عذراً، يرجى إرسال الإثبات كصورة حصراً.")
         return SUB_CASH_PROOF
@@ -140,11 +167,11 @@ async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]
     plan = context.user_data.get("sub_plan", {})
     method = context.user_data.get("sub_method", "unknown")
-    
+
     await update.message.reply_text(
         "✅ تم استقبال إثبات الدفع بنجاح.\n⏳ جاري مراجعته من قبل الإدارة لتفعيل باقتك في أقرب وقت ممكن."
     )
-    
+
     username_clean = f"@{user.username}" if user.username else user.full_name
     admin_text = (
         f"🚨 *طلب اشتراك جديد بانتظار المراجعة* 🚨\n\n"
@@ -154,14 +181,14 @@ async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 السعر: `{plan.get('price', 0)}$`\n"
         f"💳 طريقة الدفع: *{method.upper()}*\n"
     )
-    
+
     kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ قبول وتفعيل", callback_data=f"admin_sub_approve_{uid}_{plan.get('id', 0)}"),
             InlineKeyboardButton("❌ رفض الطلب", callback_data=f"admin_sub_reject_{uid}")
         ]
     ])
-    
+
     for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_photo(
@@ -173,12 +200,12 @@ async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception as e:
             logger.error(f"Failed to send sub proof to admin {admin_id}: {e}")
-            
+
     return ConversationHandler.END
 
 
 # =====================================================================
-# 📊 نظام معالجة أزرار الأدمن (خارج الـ ConversationHandler لضمان عملها)
+# 📊 نظام معالجة أزرار الأدمن (مستمع عام منفصل ومستقل عن محادثات المستخدمين)
 # =====================================================================
 async def admin_sub_buttons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -194,48 +221,86 @@ async def admin_sub_buttons_handler(update: Update, context: ContextTypes.DEFAUL
     if data.startswith("admin_sub_approve_"):
         # تفكيك البيانات: admin_sub_approve_{uid}_{plan_id}
         parts = data.split("_")
-        target_uid = int(parts[3])
-        plan_id = int(parts[4])
-        
+        # admin=0, sub=1, approve=2, uid=3, plan_id=4
+        try:
+            target_uid = int(parts[3])
+            plan_id = int(parts[4])
+        except (IndexError, ValueError):
+            await query.answer("❌ بيانات الطلب غير صحيحة.", show_alert=True)
+            return
+
         plan = db.get_plan_by_id(plan_id)
         if plan:
             # تفعيل الاشتراك في قاعدة البيانات
-            db.add_or_update_subscription(target_uid, plan) # تأكد أن هذا اسم دالة الحفظ لديك بالـ DB
-            
+            db.create_subscription(
+                target_uid,
+                plan['id'],
+                plan['name'],
+                plan['duration_days'],
+                plan['daily_limit']
+            )
+
             # إرسال إشعار للمستخدم المستهدف بنجاح التفعيل
             try:
                 await context.bot.send_message(
                     chat_id=target_uid,
-                    text=f"🎉 *تهانينا\! تم قبول طلب التحويل وتفعيل باقة {plan['name']} بنجاح\.*",
+                    text=f"🎉 *تهانينا\\! تم قبول طلب التحويل وتفعيل باقة {plan['name']} بنجاح\\.*",
                     parse_mode="MarkdownV2"
                 )
-            except Exception:
-                pass
-                
-            await query.edit_message_caption(
-                caption=query.message.caption + f"\n\n✅ *تم قبول الطلب وتفعيل الباقة بواسطة المشرف\.*",
-                reply_markup=None,
-                parse_mode="Markdown"
-            )
+            except Exception as e:
+                logger.warning(f"Could not notify user {target_uid}: {e}")
+
+            try:
+                await query.edit_message_caption(
+                    caption=(query.message.caption or "") + f"\n\n✅ *تم قبول الطلب وتفعيل الباقة بواسطة المشرف\\.*",
+                    reply_markup=None,
+                    parse_mode="MarkdownV2"
+                )
+            except Exception as e:
+                logger.warning(f"Could not edit admin message: {e}")
+                try:
+                    await query.message.reply_text("✅ تم قبول الطلب وتفعيل الباقة بنجاح.")
+                except Exception:
+                    pass
+        else:
+            await query.answer("❌ الباقة غير موجودة في قاعدة البيانات.", show_alert=True)
 
     elif data.startswith("admin_sub_reject_"):
-        target_uid = int(data.split("_")[3])
-        
+        try:
+            target_uid = int(data.split("_")[3])
+        except (IndexError, ValueError):
+            await query.answer("❌ بيانات الطلب غير صحيحة.", show_alert=True)
+            return
+
         # إشعار المستخدم بالرفض
         try:
             await context.bot.send_message(
                 chat_id=target_uid,
-                text="❌ *عذراً، تم رفض طلب الاشتراك لعدم صحة بيانات التحويل، يرجى مراجعة الدعم الفني\.*",
+                text="❌ *عذراً، تم رفض طلب الاشتراك لعدم صحة بيانات التحويل، يرجى مراجعة الدعم الفني\\.*",
                 parse_mode="MarkdownV2"
             )
-        except Exception:
-            pass
-            
-        await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n❌ *تم رفض هذا الطلب وإلغاؤه بواسطة المشرف\.*",
-            reply_markup=None,
-            parse_mode="Markdown"
-        )
+        except Exception as e:
+            logger.warning(f"Could not notify user {target_uid}: {e}")
+
+        try:
+            await query.edit_message_caption(
+                caption=(query.message.caption or "") + f"\n\n❌ *تم رفض هذا الطلب وإلغاؤه بواسطة المشرف\\.*",
+                reply_markup=None,
+                parse_mode="MarkdownV2"
+            )
+        except Exception as e:
+            logger.warning(f"Could not edit admin message: {e}")
+            try:
+                await query.message.reply_text("❌ تم رفض الطلب.")
+            except Exception:
+                pass
+
+
+def get_admin_approval_handlers():
+    """إرجاع handler أزرار الأدمن بشكل منفصل لتسجيله قبل كل شيء آخر."""
+    return [
+        CallbackQueryHandler(admin_sub_buttons_handler, pattern=r"^admin_sub_(approve|reject)_")
+    ]
 
 
 def get_handlers():
@@ -246,7 +311,7 @@ def get_handlers():
         states={
             SUB_SELECT_METHOD: [
                 CallbackQueryHandler(sub_select_plan, pattern="^sub_plan_"),
-                CallbackQueryHandler(handle_sub_method_selection, pattern="^sub_method_") # يلتقط أي وسيلة دفع ديناميكياً
+                CallbackQueryHandler(handle_sub_method_selection, pattern=r"^sub_method_\d+_"),
             ],
             SUB_CASH_PROOF: [
                 MessageHandler(filters.PHOTO, handle_sub_proof),
@@ -258,8 +323,17 @@ def get_handlers():
         ],
         per_message=False
     )
-    
-    # معالج أزرار الأدمن يوضع كمستمع عام منفصل ليعمل بشكل مستقل عن محادثات المستخدمين
-    admin_buttons_handler = CallbackQueryHandler(admin_sub_buttons_handler, pattern="^admin_sub_(approve|reject)_")
-    
-    return [conv_handler, admin_buttons_handler]
+
+    # معالج أزرار الأدمن: مستمع عام مستقل
+    admin_buttons_handler = CallbackQueryHandler(
+        admin_sub_buttons_handler,
+        pattern=r"^admin_sub_(approve|reject)_"
+    )
+
+    # معالج عالمي لاختيار طريقة الدفع: يعمل حتى لو فُقدت حالة المحادثة (مثلاً بعد إعادة تشغيل البوت)
+    global_method_handler = CallbackQueryHandler(
+        handle_sub_method_selection,
+        pattern=r"^sub_method_\d+_"
+    )
+
+    return [conv_handler, admin_buttons_handler, global_method_handler]

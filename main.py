@@ -39,6 +39,11 @@ def main():
     logger.info("Starting bot...")
     app = Application.builder().token(BOT_TOKEN).build()
 
+    # يجب تسجيل أزرار قبول/رفض الاشتراك أولاً قبل أي ConversationHandler
+    # لضمان عملها حتى لو كان الأدمن في حالة محادثة أخرى
+    for handler in subscription_handler.get_admin_approval_handlers():
+        app.add_handler(handler)
+
     # Start handler
     for handler in start.get_handlers():
         app.add_handler(handler)
