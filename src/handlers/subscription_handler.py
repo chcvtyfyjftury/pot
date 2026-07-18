@@ -125,15 +125,93 @@ async def sub_method_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SUB_CASH_PROOF
 
 
+async def sub_method_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    method_type = query.data.replace("sub_method_", "")
+    plan = context.user_data.get("sub_plan", {})
+    setting = db.get_payment_setting(method_type)
+    
+    if not setting or not setting.get("address"):
+        await query.edit_message_text(
+            f"❌ لم يتم إعداد بيانات الدفع لـ {method_type} بعد\nيرجى التواصل مع الإدارة.",
+            parse_mode="Markdown",
+            reply_markup=_back_sub(),
+        )
+        return ConversationHandler.END
+
+    context.user_data["sub_method"] = method_type
+    context.user_data["sub_setting"] = dict(setting)
+    instr = setting.get("instructions") or ""
+    
+    display_name = setting.get("display_name", method_type.replace("_", " ").title())
+    
+    text = (
+        f"💵 *الدفع عبر {display_name}*\n\n"
+        f"📦 الباقة: *{plan.get('name','')}*\n"
+        f"💰 السعر: `{plan.get('price',0)}$`\n\n"
+        f"📌 *تفاصيل الحساب / الرقم:*\n`{setting['address']}`\n\n"
+        f"{instr}\n\n"
+        f"📷 بعد إتمام التحويل، يرجى إرسال *صورة لقطة شاشة (Screenshot) كإثبات للعملية:*"
+    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")]])
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    return SUB_CASH_PROOF
+
+
 async def handle_sub_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دالة مؤقتة لاستقبال الصورة حتى لا ينكسر الكود"""
-    query = update.message
-    await query.reply_text("✅ تم استقبال إثبات الدفع، سيتم مراجعته من قبل الإدارة.")
+    user = update.effective_user
+    uid = user.id
+    
+    if not update.message.photo:
+        await update.message.reply_text("❌ عذراً، يرجى إرسال الإثبات كصورة حصراً.")
+        return SUB_CASH_PROOF
+
+    photo = update.message.photo[-1]
+    plan = context.user_data.get("sub_plan", {})
+    method = context.user_data.get("sub_method", "unknown")
+    
+    await update.message.reply_text(
+        "✅ تم استقبال إثبات الدفع بنجاح.\n"
+        "⏳ جاري مراجعته من قبل الإدارة لتفعيل باقتك في أقرب وقت ممكن."
+    )
+    
+    # تنظيف وتجهيز اسم المستخدم لتجنب أخطاء السيرفر عند الإرسال
+    username_clean = f"@{user.username}" if user.username else user.full_name
+    
+    admin_text = (
+        f"🚨 *طلب اشتراك جديد بانتظار المراجعة* 🚨\n\n"
+        f"👤 المستخدِم: {username_clean}\n"
+        f"🆔 آيدي الحساب: `{uid}`\n"
+        f"📦 الباقة المطلوبة: *{plan.get('name', 'غير معروف')}*\n"
+        f"💰 السعر: `{plan.get('price', 0)}$`\n"
+        f"💳 طريقة الدفع: *{method.upper()}*\n"
+    )
+    
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ قبول وتفعيل", callback_data=f"admin_sub_approve_{uid}_{plan.get('id', 0)}"),
+            InlineKeyboardButton("❌ رفض الطلب", callback_data=f"admin_sub_reject_{uid}")
+        ]
+    ])
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_photo(
+                chat_id=admin_id,
+                photo=photo.file_id,
+                caption=admin_text,
+                reply_markup=kb,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send sub proof to admin {admin_id}: {e}")
+            
     return ConversationHandler.END
 
 
 def get_handlers():
-    """هذه الدالة التي يبحث عنها ملف main.py لتشغيل نظام الاشتراكات"""
     conv_handler = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(sub_menu, pattern="^sub_menu$")
@@ -141,7 +219,8 @@ def get_handlers():
         states={
             SUB_SELECT_METHOD: [
                 CallbackQueryHandler(sub_select_plan, pattern="^sub_plan_"),
-                CallbackQueryHandler(sub_method_usdt, pattern="^sub_method_usdt")
+                CallbackQueryHandler(sub_method_usdt, pattern="^sub_method_usdt$"),
+                CallbackQueryHandler(sub_method_cash, pattern="^sub_method_(syriatel_cash|sham_cash)$")
             ],
             SUB_CASH_PROOF: [
                 MessageHandler(filters.PHOTO, handle_sub_proof),
