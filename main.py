@@ -56,6 +56,12 @@ def main():
     for handler in subscription_handler.get_handlers():
         app.add_handler(handler)
 
+    # Proxy handler must be registered before feature handlers so that
+    # proxy conversation states (text input) take priority over any
+    # leftover state from af/adj/singular/farm conversations.
+    for handler in proxy_handler.get_handlers():
+        app.add_handler(handler)
+
     # Feature handlers
     for handler in af_handler.get_handlers():
         app.add_handler(handler)
@@ -67,9 +73,6 @@ def main():
         app.add_handler(handler)
 
     for handler in farm_handler.get_handlers():
-        app.add_handler(handler)
-
-    for handler in proxy_handler.get_handlers():
         app.add_handler(handler)
 
     for handler in platform_handler.get_handlers():
