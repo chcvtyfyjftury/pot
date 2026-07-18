@@ -6,7 +6,6 @@ from telegram.ext import (
 
 from src.config import ADMIN_IDS
 from src.database import queries as db
-from src.services.binance import verify_usdt_deposit
 from src.middlewares.auth import allow_free_access
 
 logger = logging.getLogger(__name__)
@@ -96,6 +95,10 @@ async def sub_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def sub_method_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    USDT payment — manual screenshot flow (same as sham_cash/syriatel_cash).
+    Previously used Binance auto-verify; now admin approves manually.
+    """
     query = update.callback_query
     await query.answer()
 
@@ -116,68 +119,119 @@ async def sub_method_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"💎 *الدفع عبر USDT (TRC20)*\n\n"
         f"📦 الباقة: *{plan.get('name','')}*\n"
-        f"💰 المبلغ: `{plan.get('price',0)}$` USDT\n\n"
+        f"💰 المبلغ: `{plan.get('price',0)}import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
+)
+
+from src.config import ADMIN_IDS
+from src.database import queries as db
+from src.middlewares.auth import allow_free_access
+
+logger = logging.getLogger(__name__)
+
+SUB_SELECT_METHOD, SUB_USDT_TX, SUB_CASH_PROOF = range(700, 703)
+
+
+def _back_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]])
+
+
+def _back_sub() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")]])
+
+
+@allow_free_access
+async def sub_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    uid = update.effective_user.id
+    db.upsert_user(uid, update.effective_user.username or "", update.effective_user.full_name or "")
+
+    sub = db.get_active_subscription(uid)
+    sub_text = ""
+    if sub and uid not in ADMIN_IDS:
+        used = sub.get("daily_used", 0)
+        limit = sub.get("daily_limit", 0)
+        remaining = limit - used
+        sub_text = f"\n\n✅ *اشتراكك الحالي:* {sub.get('plan_name','')}\n📊 الاستخدام اليوم: `{used}/{limit}`\n📈 متبقي: `{remaining}` عملية"
+
+    plans = db.get_active_plans()
+    if not plans:
+        await query.edit_message_text(
+            "📦 *الاشتراك*\n\nلا توجد باقات متاحة حالياً.",
+            parse_mode="Markdown",
+            reply_markup=_back_main(),
+        )
+        return ConversationHandler.END
+
+    kb = []
+    for p in plans:
+        label = f"{p['name']} — {p['price']}$ | {p['daily_limit']} عملية/يوم | {p['duration_days']} يوم"
+        kb.append([InlineKeyboardButton(label, callback_data=f"sub_plan_{p['id']}")])
+    kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
+
+    text = f"📦 *اختر الباقة المناسبة:*{sub_text}"
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    return SUB_SELECT_METHOD
+
+
+async def sub_select_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    plan_id = int(query.data.replace("sub_plan_", ""))
+    plan = db.get_plan_by_id(plan_id)
+    if not plan:
+        await query.edit_message_text("❌ الباقة غير موجودة", reply_markup=_back_sub())
+        return ConversationHandler.END
+
+    context.user_data["sub_plan"] = plan
+
+    methods = db.get_active_payment_settings()
+    if not methods:
+        await query.edit_message_text(
+            "❌ لا توجد طرق دفع متاحة حالياً\nيرجى التواصل مع الإدارة.",
+            parse_mode="Markdown",
+            reply_markup=_back_sub(),
+        )
+        return ConversationHandler.END
+
+    kb = []
+    for m in methods:
+        kb.append([InlineKeyboardButton(m["display_name"], callback_data=f"sub_method_{m['method']}")])
+    kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")])
+
+    text = (
+        f"💳 *اختر طريقة الدفع*\n\n"
+        f"📦 الباقة: *{plan['name']}*\n"
+        f"💰 السعر: `{plan['price']}$`\n"
+        f"📊 الحد اليومي: `{plan['daily_limit']}` عملية\n"
+        f"⏳ المدة: `{plan['duration_days']}` يوم"
+    )
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    return SUB_SELECT_METHOD
+
+
+ USDT\n\n"
         f"📬 *عنوان المحفظة:*\n`{setting['address']}`\n\n"
         f"{instr}\n\n"
-        f"✅ بعد الإرسال، أدخل *رقم عملية التحويل (TxID)*:"
+        f"📷 بعد الإرسال، أرسل *صورة إثبات التحويل:*"
     )
-    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=_back_sub())
-    return SUB_USDT_TX
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")]])
+    await query.edit_message_text(text, parse_mode="Markdown", reply_markup=kb)
+    return SUB_CASH_PROOF
 
 
 async def sub_usdt_tx(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    tx_id = update.message.text.strip()
-    user = update.effective_user
-    plan = context.user_data.get("sub_plan", {})
-    setting = context.user_data.get("sub_setting", {})
-
-    await update.message.reply_text("⏳ *جاري التحقق من العملية...*", parse_mode="Markdown")
-
-    api_key = setting.get("binance_api_key", "")
-    api_secret = setting.get("binance_api_secret", "")
-    expected = float(plan.get("price", 0))
-
-    verified, msg = verify_usdt_deposit(api_key, api_secret, tx_id, expected)
-
-    if verified:
-        db.create_subscription(
-            user_id=user.id,
-            plan_id=plan["id"],
-            plan_name=plan["name"],
-            duration_days=plan["duration_days"],
-            daily_limit=plan["daily_limit"],
-        )
-        db.process_payment_request_auto(
-            user_id=user.id,
-            user_name=user.full_name or "",
-            user_username=user.username or "",
-            plan_id=plan["id"],
-            plan_name=plan["name"],
-            method="usdt",
-            amount=expected,
-            transaction_id=tx_id,
-        )
-        await update.message.reply_text(
-            f"🎉 *تم تفعيل اشتراكك!*\n\n"
-            f"📦 الباقة: *{plan['name']}*\n"
-            f"📊 الحد اليومي: `{plan['daily_limit']}` عملية\n"
-            f"⏳ مدة الباقة: `{plan['duration_days']}` يوم\n\n"
-            f"{msg}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")
-            ]]),
-        )
-    else:
-        await update.message.reply_text(
-            f"❌ *فشل التحقق*\n\n{msg}\n\nتأكد من رقم العملية وأعد المحاولة أو تواصل مع الإدارة.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 رجوع", callback_data="sub_menu")
-            ]]),
-        )
-
-    return ConversationHandler.END
+    # Legacy handler — kept for compatibility; current USDT flow uses SUB_CASH_PROOF.
+    await update.message.reply_text(
+        "❌ يرجى إرسال *صورة إثبات الدفع* بدلاً من النص.",
+        parse_mode="Markdown",
+    )
+    return SUB_CASH_PROOF
 
 
 async def sub_method_cash(update: Update, context: ContextTypes.DEFAULT_TYPE):

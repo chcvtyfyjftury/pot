@@ -1118,7 +1118,32 @@ async def plan_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def get_conversation_handler():
     return ConversationHandler(
-        entry_points=[CallbackQueryHandler(admin_panel, pattern="^admin_panel$")],
+        entry_points=[
+            CallbackQueryHandler(admin_panel, pattern="^admin_panel$"),
+            # User management prompts — must be entry_points so returning a state is honoured
+            CallbackQueryHandler(admin_add_user_prompt, pattern="^admin_add_user$"),
+            CallbackQueryHandler(admin_remove_user_prompt, pattern="^admin_remove_user$"),
+            CallbackQueryHandler(admin_ban_prompt, pattern="^admin_ban$"),
+            CallbackQueryHandler(admin_unban_prompt, pattern="^admin_unban$"),
+            CallbackQueryHandler(admin_broadcast_prompt, pattern="^admin_broadcast$"),
+            # Game management
+            CallbackQueryHandler(admin_add_game_type, pattern="^admin_add_game$"),
+            CallbackQueryHandler(admin_delete_game, pattern="^admin_delete_game$"),
+            # Event management
+            CallbackQueryHandler(admin_add_event_type, pattern="^admin_add_event$"),
+            CallbackQueryHandler(admin_delete_event, pattern="^admin_delete_event$"),
+            # Payment settings prompts
+            CallbackQueryHandler(payment_set_address_prompt, pattern=r"^payment_set_address_"),
+            CallbackQueryHandler(payment_set_instructions_prompt, pattern=r"^payment_set_instructions_"),
+            CallbackQueryHandler(payment_set_apikey_prompt, pattern=r"^payment_set_apikey_"),
+            CallbackQueryHandler(payment_set_apisecret_prompt, pattern=r"^payment_set_apisecret_"),
+            # Plan management prompts
+            CallbackQueryHandler(plan_add_start, pattern="^plan_add$"),
+            CallbackQueryHandler(plan_set_name_prompt, pattern=r"^plan_set_name_"),
+            CallbackQueryHandler(plan_set_duration_prompt, pattern=r"^plan_set_duration_"),
+            CallbackQueryHandler(plan_set_price_prompt, pattern=r"^plan_set_price_"),
+            CallbackQueryHandler(plan_set_limit_prompt, pattern=r"^plan_set_limit_"),
+        ],
         states={
             ADMIN_ADD_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_user_process)],
             ADMIN_REMOVE_USER: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_remove_user_process)],

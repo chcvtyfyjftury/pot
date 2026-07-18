@@ -78,7 +78,6 @@ async def singular_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return SNG_AIFA
 
 
-@require_access
 async def singular_aifa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sg_aifa"] = update.message.text.strip()
     await update.message.reply_text(
@@ -88,7 +87,6 @@ async def singular_aifa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SNG_UID
 
 
-@require_access
 async def singular_idfa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sg_idfa"] = update.message.text.strip()
     await update.message.reply_text(
@@ -98,7 +96,6 @@ async def singular_idfa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SNG_IDFV
 
 
-@require_access
 async def singular_idfv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sg_idfv"] = update.message.text.strip()
     await update.message.reply_text(
@@ -108,13 +105,11 @@ async def singular_idfv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SNG_UID_IOS
 
 
-@require_access
 async def singular_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sg_uid"] = update.message.text.strip()
     return await _show_singular_events(update, context)
 
 
-@require_access
 async def singular_uid_ios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["sg_uid"] = update.message.text.strip()
     return await _show_singular_events(update, context)

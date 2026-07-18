@@ -78,7 +78,6 @@ async def af_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AF_GAID
 
 
-@require_access
 async def af_gaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     gaid = update.message.text.strip()
     context.user_data["af_gaid"] = gaid
@@ -89,7 +88,6 @@ async def af_gaid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AF_UID
 
 
-@require_access
 async def af_idfa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idfa = update.message.text.strip()
     context.user_data["af_idfa"] = idfa
@@ -100,7 +98,6 @@ async def af_idfa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AF_IDFV
 
 
-@require_access
 async def af_idfv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idfv = update.message.text.strip()
     context.user_data["af_idfv"] = idfv
@@ -111,13 +108,11 @@ async def af_idfv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AF_UID_IOS
 
 
-@require_access
 async def af_uid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["af_uid"] = update.message.text.strip()
     return await _show_af_events(update, context)
 
 
-@require_access
 async def af_uid_ios(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["af_uid"] = update.message.text.strip()
     return await _show_af_events(update, context)
