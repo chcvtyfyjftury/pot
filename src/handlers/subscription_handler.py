@@ -119,7 +119,8 @@ async def sub_method_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"💎 *الدفع عبر USDT (TRC20)*\n\n"
         f"📦 الباقة: *{plan.get('name','')}*\n"
-        f"💰 المبلغ: `{plan.get('price',0)}import logging
+        f"💰 المبلغ: `{plan.get('price',0)}`"
+        import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
