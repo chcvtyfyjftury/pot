@@ -1,3 +1,4 @@
+import re
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -10,7 +11,7 @@ from src.services.appsflyer import send_af
 
 logger = logging.getLogger(__name__)
 
-AF_GAID, AF_IDFA, AF_IDFV, AF_UID, AF_UID_IOS = range(100, 105)
+AF_GAID, AF_IDFA, AF_IDFV, AF_UID, AF_UID_IOS, AF_CUSTOM_LEVEL = range(100, 106)
 
 
 def _result_text(status: int, resp: str) -> str:
@@ -21,6 +22,18 @@ def _result_text(status: int, resp: str) -> str:
 
 def _back_kb(data: str = "af_menu") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data=data)]])
+
+
+def _events_kb(game_id: int, include_back: bool = True) -> InlineKeyboardMarkup:
+    events = db.get_af_events(game_id)
+    kb = []
+    for ev in events:
+        kb.append([InlineKeyboardButton(f"📊 {ev['display_name']}", callback_data=f"af_send_{ev['id']}")])
+    kb.append([InlineKeyboardButton("✨ حدث مخصص", callback_data="af_custom_event")])
+    kb.append([InlineKeyboardButton("🔢 لفل مخصص", callback_data="af_custom_level")])
+    if include_back:
+        kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="af_menu")])
+    return InlineKeyboardMarkup(kb)
 
 
 @require_access
@@ -130,14 +143,9 @@ async def _show_af_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    kb = [
-        [InlineKeyboardButton(ev["display_name"], callback_data=f"af_send_{ev['id']}")]
-        for ev in events
-    ]
-    kb.append([InlineKeyboardButton("🔙 رجوع", callback_data="af_menu")])
     await update.message.reply_text(
         f"🎯 *اختر الحدث*\n🎮 {game.get('display_name', '')}",
-        reply_markup=InlineKeyboardMarkup(kb),
+        reply_markup=_events_kb(game_id),
         parse_mode="Markdown",
     )
     return ConversationHandler.END
@@ -185,6 +193,8 @@ async def af_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         level=event.get("level_value"),
     )
 
+    db.increment_requests(uid)
+
     result_text = _result_text(status, resp)
     kb = [
         [InlineKeyboardButton("🎯 حدث آخر", callback_data=f"af_game_{game.get('id')}")],
@@ -198,6 +208,146 @@ async def af_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+@require_access
+async def af_custom_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["af_custom_state"] = "event_name"
+    await query.edit_message_text(
+        "✨ *حدث مخصص*\n\n📝 *أدخل اسم الحدث:*\nمثال: `af_level_50` أو `Complete_Level`",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 إلغاء", callback_data=f"af_game_{context.user_data.get('af_game_id', '')}")]
+        ]),
+    )
+    return AF_CUSTOM_LEVEL
+
+
+@require_access
+async def af_custom_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["af_custom_state"] = "level"
+    await query.edit_message_text(
+        "✨ *لفل مخصص*\n\n"
+        "أدخل رقم اللفل المطلوب (مثال: 45 أو 46) وسيُرسل الحدث فوراً:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 إلغاء", callback_data=f"af_game_{context.user_data.get('af_game_id', '')}")]
+        ]),
+    )
+    return AF_CUSTOM_LEVEL
+
+
+async def af_custom_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    state = context.user_data.get("af_custom_state")
+    text = update.message.text.strip()
+    game_id = context.user_data.get("af_game_id")
+    game = context.user_data.get("af_game", {})
+    cancel_kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 إلغاء", callback_data=f"af_game_{game_id}")]
+    ])
+
+    if state == "event_name":
+        if not text:
+            await update.message.reply_text("❌ الرجاء إدخال اسم صحيح", reply_markup=cancel_kb)
+            return AF_CUSTOM_LEVEL
+        context.user_data.pop("af_custom_state", None)
+
+        uid = update.effective_user.id
+        platform = db.get_user_platform(uid)
+        proxy_row = db.get_proxy_for_user(uid)
+
+        await update.message.reply_text("📤 *جاري الإرسال فوراً...*", parse_mode="Markdown")
+        status, resp = send_af(
+            pkg=game.get("package", ""),
+            dev_key=game.get("dev_key", ""),
+            gaid=context.user_data.get("af_gaid", ""),
+            af_uid=context.user_data.get("af_uid", ""),
+            event_name=text,
+            revenue=None,
+            proxy=dict(proxy_row) if proxy_row else None,
+            platform=platform,
+            idfa=context.user_data.get("af_idfa"),
+            idfv=context.user_data.get("af_idfv"),
+            level=None,
+        )
+        db.increment_requests(uid)
+        result_text = _result_text(status, resp)
+        kb = [
+            [InlineKeyboardButton("🎯 حدث آخر", callback_data=f"af_game_{game_id}")],
+            [InlineKeyboardButton("🔙 قائمة الألعاب", callback_data="af_menu")],
+            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")],
+        ]
+        await update.message.reply_text(
+            f"{result_text}\n\n📝 *الحدث:* `{text}`\n🎮 *اللعبة:* {game.get('display_name', '')}",
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    elif state == "level":
+        digits = ''.join(filter(str.isdigit, text))
+        if not digits:
+            await update.message.reply_text(
+                "❌ الرجاء إدخال رقم صحيح للفل (مثال: 45)",
+                reply_markup=cancel_kb,
+            )
+            return AF_CUSTOM_LEVEL
+
+        context.user_data.pop("af_custom_state", None)
+        pkg = game.get("package", "")
+        dev_key = game.get("dev_key", "")
+        if not pkg or not dev_key:
+            await update.message.reply_text("❌ خطأ: بيانات اللعبة غير موجودة، الرجاء إعادة اختيار اللعبة", reply_markup=cancel_kb)
+            return ConversationHandler.END
+
+        # بناء اسم الحدث من أول حدث مخزّن للعبة مع استبدال الرقم
+        events = db.get_af_events(game_id) if game_id else []
+        if events:
+            base_event = events[0]["event_name"]
+            if re.search(r'\d+', base_event):
+                event_name = re.sub(r'\d+', digits, base_event)
+            else:
+                event_name = f"af_level_{digits}_achieved"
+        else:
+            event_name = f"af_level_{digits}_achieved"
+
+        uid = update.effective_user.id
+        platform = db.get_user_platform(uid)
+        proxy_row = db.get_proxy_for_user(uid)
+
+        await update.message.reply_text("📤 *جاري الإرسال فوراً...*", parse_mode="Markdown")
+        status, resp = send_af(
+            pkg=pkg,
+            dev_key=dev_key,
+            gaid=context.user_data.get("af_gaid", ""),
+            af_uid=context.user_data.get("af_uid", ""),
+            event_name=event_name,
+            revenue=None,
+            proxy=dict(proxy_row) if proxy_row else None,
+            platform=platform,
+            idfa=context.user_data.get("af_idfa"),
+            idfv=context.user_data.get("af_idfv"),
+            level=int(digits) if digits.isdigit() else None,
+        )
+        db.increment_requests(uid)
+        result_text = _result_text(status, resp)
+        kb = [
+            [InlineKeyboardButton("🎯 حدث آخر", callback_data=f"af_game_{game_id}")],
+            [InlineKeyboardButton("🔙 قائمة الألعاب", callback_data="af_menu")],
+            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")],
+        ]
+        await update.message.reply_text(
+            f"{result_text}\n\n📝 *الحدث:* `{event_name}`\n🔢 *رقم اللفل:* {digits}\n🎮 *اللعبة:* {game.get('display_name', '')}",
+            reply_markup=InlineKeyboardMarkup(kb),
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    return ConversationHandler.END
+
+
 def get_handlers():
     conv = ConversationHandler(
         entry_points=[
@@ -205,11 +355,12 @@ def get_handlers():
             CallbackQueryHandler(af_game, pattern=r"^af_game_\d+$"),
         ],
         states={
-            AF_GAID:    [MessageHandler(filters.TEXT & ~filters.COMMAND, af_gaid)],
-            AF_IDFA:    [MessageHandler(filters.TEXT & ~filters.COMMAND, af_idfa)],
-            AF_IDFV:    [MessageHandler(filters.TEXT & ~filters.COMMAND, af_idfv)],
-            AF_UID:     [MessageHandler(filters.TEXT & ~filters.COMMAND, af_uid)],
-            AF_UID_IOS: [MessageHandler(filters.TEXT & ~filters.COMMAND, af_uid_ios)],
+            AF_GAID:        [MessageHandler(filters.TEXT & ~filters.COMMAND, af_gaid)],
+            AF_IDFA:        [MessageHandler(filters.TEXT & ~filters.COMMAND, af_idfa)],
+            AF_IDFV:        [MessageHandler(filters.TEXT & ~filters.COMMAND, af_idfv)],
+            AF_UID:         [MessageHandler(filters.TEXT & ~filters.COMMAND, af_uid)],
+            AF_UID_IOS:     [MessageHandler(filters.TEXT & ~filters.COMMAND, af_uid_ios)],
+            AF_CUSTOM_LEVEL:[MessageHandler(filters.TEXT & ~filters.COMMAND, af_custom_input)],
         },
         fallbacks=[CallbackQueryHandler(af_menu, pattern="^af_menu$")],
         allow_reentry=True,
@@ -217,4 +368,6 @@ def get_handlers():
     return [
         conv,
         CallbackQueryHandler(af_send, pattern=r"^af_send_\d+$"),
+        CallbackQueryHandler(af_custom_event, pattern="^af_custom_event$"),
+        CallbackQueryHandler(af_custom_level, pattern="^af_custom_level$"),
     ]

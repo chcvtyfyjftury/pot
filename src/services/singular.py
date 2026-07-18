@@ -1,7 +1,6 @@
 import requests
 import logging
 import time
-import random
 from typing import Optional, Dict, Tuple
 
 logger = logging.getLogger(__name__)
@@ -31,51 +30,45 @@ def send_singular(
     uid: str,
     package: str,
     app_key: str,
-    level: int = None,
+    level=None,
     proxy: Optional[Dict] = None,
     platform: str = "android",
     idfa: str = None,
     idfv: str = None,
     singular_uid: str = None,
 ) -> Tuple[int, str]:
-    if platform == "ios":
-        advertising_id = idfa or aifa
-        id_param = "idfa"
-    else:
-        advertising_id = aifa
-        id_param = "aifa"
-
-    payload: Dict = {
+    # بناء المعاملات كما في الرابط الشغال (GET request)
+    params: Dict = {
         "a": app_key,
-        "p": package,
+        "p": "Android",
         "i": package,
-        "av": "1.0.0",
+        "aifa": aifa or "",
+        "u": singular_uid or uid or "",
+        "utime": str(int(time.time())),
         "n": event_name,
-        id_param: advertising_id,
-        "e": event_name,
-        "custom_user_id": singular_uid or uid,
-        "ts": str(int(time.time())),
-        "ip": f"{random.randint(1,254)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}",
-        "ve": "1.0.0",
-        "ma": "samsung",
-        "mo": "SM-A515F",
-        "country": "SA",
-        "lc": "ar_SA",
     }
 
-    if idfv:
-        payload["idfv"] = idfv
+    # iOS: استخدم idfa بدل aifa
+    if platform == "ios" and idfa:
+        params["aifa"] = idfa
+        if idfv:
+            params["idfv"] = idfv
+
+    # إضافة رقم اللفل إن وُجد
     if level is not None:
-        payload["level"] = str(level)
+        params["level"] = str(level)
+
+    # تنظيف المعاملات الفارغة
+    params = {k: v for k, v in params.items() if v}
 
     headers = {
-        "Content-Type": "application/json",
-        "User-Agent": "okhttp/4.9.1",
+        "User-Agent": "SingularS2S/1.0",
+        "Accept": "application/json",
     }
 
     try:
         proxies = _build_proxy(proxy)
-        r = requests.post(SINGULAR_URL, json=payload, headers=headers, timeout=30, proxies=proxies)
+        r = requests.get(SINGULAR_URL, params=params, headers=headers, timeout=30, proxies=proxies)
         logger.info(f"[SNG] {package} | {event_name} | status={r.status_code}")
         return r.status_code, r.text[:500]
     except Exception as e:
